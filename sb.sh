@@ -3740,12 +3740,10 @@ fi
 
 green "Enabling the SOCKS5 proxy in Sing-box..."
 
-local socks_port=1080
+local socks_port=10080
 if ss -tlnp 2>/dev/null | grep -q ":${socks_port} "; then
-readp "Port $socks_port is already in use. Enter a custom port: " socks_port
-if [[ -z "$socks_port" ]]; then
-socks_port=10800
-fi
+red "Fixed SOCKS5 port $socks_port is already in use. Free this port before enabling Telegram SOCKS5." && sleep 2 && manage_socks5
+return
 fi
 
 local socks_user="socks5"
