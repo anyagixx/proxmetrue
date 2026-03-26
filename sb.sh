@@ -3689,6 +3689,41 @@ get_socks5_index(){
 jq -r '.inbounds | to_entries[] | select(.value.tag == "socks5-in" or .value.type == "socks") | .key' /etc/s-box/sb.json 2>/dev/null | head -n 1
 }
 
+open_socks5_port(){
+local port=$1
+if [[ -z "$port" ]]; then
+return 0
+fi
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw active; then
+ufw allow "${port}/tcp" >/dev/null 2>&1
+elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+firewall-cmd --reload >/dev/null 2>&1
+fi
+}
+
+close_socks5_port(){
+local port=$1
+if [[ -z "$port" ]]; then
+return 0
+fi
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw active; then
+ufw delete allow "${port}/tcp" >/dev/null 2>&1
+elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+firewall-cmd --permanent --remove-port="${port}/tcp" >/dev/null 2>&1
+firewall-cmd --reload >/dev/null 2>&1
+fi
+}
+
+socks5_local_test(){
+local user=$1
+local pass=$2
+local port=$3
+curl -sx "socks5h://${user}:${pass}@127.0.0.1:${port}" --connect-timeout 8 --max-time 15 https://icanhazip.com 2>/dev/null
+}
+
 check_socks5_exists(){
 local socks_index
 socks_index=$(get_socks5_index)
@@ -3742,10 +3777,13 @@ echo "SOCKS5_USER=$socks_user" >> /etc/s-box/socks5.env
 echo "SOCKS5_PASS=$socks_pass" >> /etc/s-box/socks5.env
 
 restartsb
+open_socks5_port "$socks_port"
 
 local server_ip
 server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
 [[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+local local_test_ip
+local_test_ip=$(socks5_local_test "$socks_user" "$socks_pass" "$socks_port")
 
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -3765,6 +3803,13 @@ echo "  Settings -> Data and Storage -> Proxy -> SOCKS5"
 echo "  Server: $server_ip:$socks_port"
 echo "  User: $socks_user"
 echo "  Password: $socks_pass"
+echo
+if [[ -n "$local_test_ip" ]]; then
+green "Local SOCKS5 test passed: $local_test_ip"
+yellow "If Telegram still cannot connect from outside, the remaining cause is usually your VPS firewall or cloud security group blocking TCP $socks_port."
+else
+red "Local SOCKS5 test failed. Check option 10 (logs) before testing Telegram again."
+fi
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 }
@@ -3787,7 +3832,10 @@ jq --argjson idx "$socks_index" 'del(.inbounds[$idx])' /etc/s-box/sb.json > "$tm
 [[ "$sbnh" == "1.10" ]] && num=10 || num=11
 cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
 
+local socks_port
+socks_port=$(grep '^SOCKS5_PORT=' /etc/s-box/socks5.env 2>/dev/null | cut -d= -f2)
 rm -f /etc/s-box/socks5.env
+close_socks5_port "$socks_port"
 
 restartsb
 
