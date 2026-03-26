@@ -2891,6 +2891,273 @@ changeserv
 fi
 }
 
+listusers(){
+echo
+green "Current user list:"
+echo
+local i=1
+while read -r user_uuid; do
+if [[ -n "$user_uuid" ]]; then
+echo -e "  ${yellow}$i${plain}. UUID: ${blue}$user_uuid${plain}"
+((i++))
+fi
+done < <(jq -r '.inbounds[0].users[].uuid' /etc/s-box/sb.json 2>/dev/null)
+echo
+local total
+total=$(jq '.inbounds[0].users | length' /etc/s-box/sb.json 2>/dev/null)
+blue "Total users: $total"
+echo
+}
+
+genuserlinks(){
+local user_uuid=$1
+if [[ -z "$user_uuid" ]]; then
+red "UUID not provided"
+return 1
+fi
+
+local exists
+exists=$(jq -r --arg uuid "$user_uuid" '.inbounds[0].users[] | select(.uuid == $uuid) | .uuid' /etc/s-box/sb.json 2>/dev/null)
+if [[ -z "$exists" ]]; then
+red "UUID not found"
+return 1
+fi
+
+local server_ip
+server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+local hostname
+hostname=$(hostname)
+local vl_port vm_port hy2_port tu5_port an_port
+local vl_name vm_name hy2_name tu5_name an_name
+local public_key short_id ws_path tls
+local hy2_key_path tu5_key_path an_key_path
+local ins_hy2=1 ins_tu5=1 ins_an=1
+local sb_hy2_ip sb_tu5_ip sb_an_ip
+local v6test vm_link vl_link hy2_link tu5_link an_link aggr_links aggr_base64
+
+vl_port=$(jq -r '.inbounds[0].listen_port' /etc/s-box/sb.json)
+vm_port=$(jq -r '.inbounds[1].listen_port' /etc/s-box/sb.json)
+hy2_port=$(jq -r '.inbounds[2].listen_port' /etc/s-box/sb.json)
+tu5_port=$(jq -r '.inbounds[3].listen_port' /etc/s-box/sb.json)
+an_port=$(jq -r '.inbounds[4].listen_port // empty' /etc/s-box/sb.json)
+vl_name=$(jq -r '.inbounds[0].tls.server_name' /etc/s-box/sb.json)
+vm_name=$(jq -r '.inbounds[1].tls.server_name' /etc/s-box/sb.json)
+hy2_name=$(jq -r '.inbounds[2].tls.server_name' /etc/s-box/sb.json)
+tu5_name=$(jq -r '.inbounds[3].tls.server_name' /etc/s-box/sb.json)
+an_name=$(jq -r '.inbounds[4].tls.server_name // empty' /etc/s-box/sb.json)
+public_key=$(cat /etc/s-box/public.key 2>/dev/null)
+short_id=$(jq -r '.inbounds[0].tls.reality.short_id[0]' /etc/s-box/sb.json)
+ws_path=$(jq -r '.inbounds[1].transport.path' /etc/s-box/sb.json)
+tls=$(jq -r '.inbounds[1].tls.enabled' /etc/s-box/sb.json)
+hy2_key_path=$(jq -r '.inbounds[2].tls.key_path' /etc/s-box/sb.json)
+tu5_key_path=$(jq -r '.inbounds[3].tls.key_path' /etc/s-box/sb.json)
+an_key_path=$(jq -r '.inbounds[4].tls.key_path // empty' /etc/s-box/sb.json)
+
+[[ "$hy2_key_path" = '/etc/s-box/private.key' ]] && ins_hy2=0
+[[ "$tu5_key_path" = '/etc/s-box/private.key' ]] && ins_tu5=0
+[[ "$an_key_path" = '/etc/s-box/private.key' ]] && ins_an=0
+
+v6test=$(curl -s6m5 ip.sb 2>/dev/null)
+if [[ -n "$v6test" ]]; then
+sb_hy2_ip="[$server_ip]"
+sb_tu5_ip="[$server_ip]"
+sb_an_ip="[$server_ip]"
+else
+sb_hy2_ip="$server_ip"
+sb_tu5_ip="$server_ip"
+sb_an_ip="$server_ip"
+fi
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "Share links for user: $user_uuid"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+
+echo
+red "🚀[ Vless-reality-vision ]"
+vl_link="vless://$user_uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-$hostname"
+echo -e "${yellow}$vl_link${plain}"
+echo
+
+red "🚀[ Vmess-ws ]"
+if [[ "$tls" = "true" ]]; then
+vm_link="vmess://$(echo '{"add":"'$server_ip'","aid":"0","host":"'$vm_name'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
+else
+vm_link="vmess://$(echo '{"add":"'$server_ip'","aid":"0","host":"'$vm_name'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
+fi
+echo -e "${yellow}$vm_link${plain}"
+echo
+
+red "🚀[ Hysteria-2 ]"
+hy2_link="hysteria2://$user_uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-$hostname"
+echo -e "${yellow}$hy2_link${plain}"
+echo
+
+red "🚀[ Tuic-v5 ]"
+tu5_link="tuic://$user_uuid:$user_uuid@$sb_tu5_ip:$tu5_port?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=$tu5_name&allow_insecure=$ins_tu5&allowInsecure=$ins_tu5#tu5-$hostname"
+echo -e "${yellow}$tu5_link${plain}"
+echo
+
+aggr_links="$vl_link
+$vm_link
+$hy2_link
+$tu5_link"
+
+if jq -e '.inbounds[4].type == "anytls"' /etc/s-box/sb.json >/dev/null 2>&1; then
+red "🚀[ AnyTLS ]"
+an_link="anytls://$user_uuid@$sb_an_ip:$an_port?&sni=$an_name&allowInsecure=$ins_an#anytls-$hostname"
+echo -e "${yellow}$an_link${plain}"
+echo
+aggr_links="$aggr_links
+$an_link"
+fi
+
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+green "QR codes:"
+echo
+green "Vless-reality QR code:"
+qrencode -o - -t ANSIUTF8 "$vl_link"
+echo
+green "Vmess-ws QR code:"
+qrencode -o - -t ANSIUTF8 "$vm_link"
+echo
+green "Hysteria2 QR code:"
+qrencode -o - -t ANSIUTF8 "$hy2_link"
+echo
+green "Tuic5 QR code:"
+qrencode -o - -t ANSIUTF8 "$tu5_link"
+if [[ -n "$an_link" ]]; then
+echo
+green "AnyTLS QR code:"
+qrencode -o - -t ANSIUTF8 "$an_link"
+fi
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+red "🚀[ Aggregated subscription ] for user: $user_uuid"
+echo
+aggr_base64=$(echo -e "$aggr_links" | base64 -w 0)
+echo "Aggregated share link (base64):"
+echo -e "${yellow}$aggr_base64${plain}"
+echo
+green "Aggregated subscription QR code:"
+qrencode -o - -t ANSIUTF8 "$aggr_base64"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+adduser(){
+sbactive
+echo
+green "Add a new user for all configured protocols"
+echo
+readp "Enter UUID (press Enter to auto-generate): " new_uuid
+if [[ -z "$new_uuid" ]]; then
+new_uuid=$(/etc/s-box/sing-box generate uuid)
+blue "Generated UUID: $new_uuid"
+fi
+
+if [[ ! "$new_uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+red "Invalid UUID format. Expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+return 1
+fi
+
+local exists
+exists=$(jq -r --arg uuid "$new_uuid" '.inbounds[0].users[] | select(.uuid == $uuid) | .uuid' /etc/s-box/sb.json 2>/dev/null)
+if [[ -n "$exists" ]]; then
+red "UUID already exists"
+return 1
+fi
+
+local num tmp_file
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+tmp_file=$(mktemp)
+
+jq --arg uuid "$new_uuid" '.inbounds[0].users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$new_uuid" '.inbounds[1].users += [{"uuid": $uuid, "alterId": 0}]' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$new_uuid" '.inbounds[2].users += [{"password": $uuid}]' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$new_uuid" '.inbounds[3].users += [{"uuid": $uuid, "password": $uuid}]' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+if jq -e '.inbounds[4].type == "anytls"' /etc/s-box/sb.json >/dev/null 2>&1; then
+jq --arg uuid "$new_uuid" '.inbounds[4].users += [{"password": $uuid}]' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+fi
+
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+green "User added successfully"
+restartsb
+genuserlinks "$new_uuid"
+}
+
+deluser(){
+sbactive
+listusers
+
+local total
+total=$(jq '.inbounds[0].users | length' /etc/s-box/sb.json 2>/dev/null)
+if [[ "$total" -le 1 ]]; then
+red "Cannot delete the last remaining user"
+return 1
+fi
+
+readp "Enter UUID to delete: " del_uuid
+if [[ -z "$del_uuid" ]]; then
+red "UUID not provided"
+return 1
+fi
+
+local exists
+exists=$(jq -r --arg uuid "$del_uuid" '.inbounds[0].users[] | select(.uuid == $uuid) | .uuid' /etc/s-box/sb.json 2>/dev/null)
+if [[ -z "$exists" ]]; then
+red "UUID not found"
+return 1
+fi
+
+local num tmp_file
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+tmp_file=$(mktemp)
+
+jq --arg uuid "$del_uuid" 'del(.inbounds[0].users[] | select(.uuid == $uuid))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$del_uuid" 'del(.inbounds[1].users[] | select(.uuid == $uuid))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$del_uuid" 'del(.inbounds[2].users[] | select(.password == $uuid))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+jq --arg uuid "$del_uuid" 'del(.inbounds[3].users[] | select(.uuid == $uuid))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+if jq -e '.inbounds[4].type == "anytls"' /etc/s-box/sb.json >/dev/null 2>&1; then
+jq --arg uuid "$del_uuid" 'del(.inbounds[4].users[] | select(.password == $uuid))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+fi
+
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+green "User deleted successfully"
+restartsb
+}
+
+manageusers(){
+sbactive
+echo
+green "User management"
+yellow "1: Add new user"
+yellow "2: Delete user"
+yellow "3: List all users"
+yellow "4: Generate share links for a specific user"
+yellow "0: Return to the main menu"
+readp "Please select [0-4]: " menu
+
+case "$menu" in
+1 ) adduser ;;
+2 ) deluser ;;
+3 ) listusers ;;
+4 )
+listusers
+readp "Enter UUID: " show_uuid
+if [[ -n "$show_uuid" ]]; then
+genuserlinks "$show_uuid"
+fi
+;;
+0 ) sb ;;
+* ) manageusers ;;
+esac
+}
+
 changeip(){
 if [[ "$sbnh" == "1.10" ]]; then
 v4v6
@@ -4304,6 +4571,7 @@ green "14. Add WARP-plus-Socks5 proxy mode [Local Warp/Multi-region Psiphon-VPN]
 green "15. Refresh local IP, adjust IPV4/IPV6 configuration output"
 white "----------------------------------------------------------------------------------"
 green "16. Sing-box-yg usage guide"
+green "17. User management (add/delete users)"
 white "----------------------------------------------------------------------------------"
 green "0. Exit the script"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -4416,7 +4684,7 @@ showprotocol
 fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
-readp "Please enter the number [0-16]:" Input
+readp "Please enter the number [0-17]:" Input
 case "$Input" in  
  1 ) instsllsingbox;;
  2 ) unins;;
@@ -4434,5 +4702,6 @@ case "$Input" in
 14 ) inssbwpph;;
 15 ) wgcfgo && sbshare;;
 16 ) sbsm;;
+17 ) manageusers;;
  * ) exit 
 esac
