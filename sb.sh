@@ -3158,6 +3158,446 @@ fi
 esac
 }
 
+install_dumbproxy(){
+if [[ -f /etc/dumbproxy/dumbproxy.cfg ]]; then
+red "Dumbproxy is already installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+green "Installing Dumbproxy HTTPS proxy..."
+
+local arch_map
+case "$(uname -m)" in
+x86_64) arch_map="amd64" ;;
+i386|i486|i586|i686) arch_map="386" ;;
+aarch64) arch_map="arm64" ;;
+armv5l|armv6l|armv7l|armhf) arch_map="arm" ;;
+*) red "Unsupported architecture: $(uname -m)" && sleep 2 && sb ;;
+esac
+
+green "1. Downloading dumbproxy binary..."
+mkdir -p /usr/local/bin
+local tmp_file
+tmp_file=$(mktemp)
+if ! curl --no-progress-meter -Lo "$tmp_file" "https://github.com/SenseUnit/dumbproxy/releases/latest/download/dumbproxy.linux-${arch_map}"; then
+red "Failed to download dumbproxy" && rm -f "$tmp_file" && sleep 2 && sb
+fi
+install "$tmp_file" /usr/local/bin/dumbproxy
+rm -f "$tmp_file"
+
+green "2. Downloading myip utility..."
+tmp_file=$(mktemp)
+if ! curl --no-progress-meter -Lo "$tmp_file" "https://github.com/Snawoot/myip/releases/latest/download/myip.linux-${arch_map}"; then
+yellow "Warning: failed to download myip, curl fallback will be used"
+else
+install "$tmp_file" /usr/local/bin/myip
+rm -f "$tmp_file"
+fi
+
+green "3. Creating directories and generating password..."
+mkdir -p /etc/dumbproxy
+local dp_passwd
+dp_passwd=$(tr -cd '[:alnum:]' < /dev/urandom | dd bs=1 count=10 2>/dev/null || echo "dumbproxy$(date +%s)" | head -c 10)
+/usr/local/bin/dumbproxy -passwd /etc/dumbproxy/passwd "auto" "${dp_passwd}" 2>/dev/null || {
+echo "auto:$(openssl passwd -apr1 "$dp_passwd")" > /etc/dumbproxy/passwd
+}
+
+green "4. Detecting external IP..."
+local ext_ip
+if [[ -f /usr/local/bin/myip ]]; then
+ext_ip=$(/usr/local/bin/myip 2>/dev/null)
+else
+ext_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+fi
+
+if [[ -z "$ext_ip" ]]; then
+red "Failed to detect external IP address" && sleep 2 && sb
+fi
+
+green "5. Installing acme.sh..."
+if [[ ! -f /usr/local/bin/acme.sh ]]; then
+curl --no-progress-meter -Lo /usr/local/bin/acme.sh 'https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh'
+chmod +x /usr/local/bin/acme.sh
+/usr/local/bin/acme.sh --install-cronjob 2>/dev/null || true
+fi
+
+green "6. Issuing an SSL certificate for IP: $ext_ip..."
+/usr/local/bin/acme.sh --issue \
+-d "$ext_ip" \
+--alpn \
+--force \
+--pre-hook "systemctl stop dumbproxy 2>/dev/null || true" \
+--post-hook "[ -e /etc/dumbproxy/cert.pem -a -e /etc/dumbproxy/fullchain.pem ] && systemctl restart dumbproxy 2>/dev/null || true" \
+--server letsencrypt \
+--certificate-profile shortlived \
+--days 3 2>/dev/null || yellow "Certificate issuance returned warnings, continuing..."
+
+/usr/local/bin/acme.sh --install-cert \
+-d "$ext_ip" \
+--cert-file /etc/dumbproxy/cert.pem \
+--key-file /etc/dumbproxy/key.pem \
+--fullchain-file /etc/dumbproxy/fullchain.pem \
+--reloadcmd "systemctl restart dumbproxy 2>/dev/null || true" 2>/dev/null || true
+
+if [[ ! -f /etc/dumbproxy/cert.pem ]]; then
+yellow "Generating a self-signed fallback certificate..."
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+-keyout /etc/dumbproxy/key.pem \
+-out /etc/dumbproxy/cert.pem \
+-subj "/CN=$ext_ip" 2>/dev/null
+cp /etc/dumbproxy/cert.pem /etc/dumbproxy/fullchain.pem
+fi
+
+green "7. Creating dumbproxy configuration..."
+local dp_port=8443
+if ss -tlnp 2>/dev/null | grep -q ":${dp_port} "; then
+readp "Port $dp_port is already in use. Enter a custom port: " dp_port
+if [[ -z "$dp_port" ]]; then
+dp_port=9443
+fi
+fi
+
+cat > /etc/dumbproxy/dumbproxy.cfg <<EOF
+auth basicfile://?path=/etc/dumbproxy/passwd
+bind-address :${dp_port}
+cert /etc/dumbproxy/fullchain.pem
+key /etc/dumbproxy/key.pem
+EOF
+
+echo "DP_PORT=$dp_port" > /etc/dumbproxy/config.env
+echo "DP_IP=$ext_ip" >> /etc/dumbproxy/config.env
+echo "DP_PASS=$dp_passwd" >> /etc/dumbproxy/config.env
+
+green "8. Creating the service definition..."
+cat > /etc/systemd/system/dumbproxy.service <<'EOF'
+[Unit]
+Description=Dumb Proxy - Simple HTTPS Proxy
+Documentation=https://github.com/SenseUnit/dumbproxy
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+User=root
+Group=root
+ExecStart=/usr/local/bin/dumbproxy -config /etc/dumbproxy/dumbproxy.cfg
+TimeoutStopSec=5s
+PrivateTmp=true
+ProtectSystem=full
+LimitNOFILE=20000
+
+[Install]
+WantedBy=default.target
+EOF
+
+if [[ x"${release}" == x"alpine" ]]; then
+green "9. Setting up the OpenRC service for Alpine..."
+cat > /etc/init.d/dumbproxy <<'EOF'
+#!/sbin/openrc-run
+name="dumbproxy"
+description="Dumb Proxy - Simple HTTPS Proxy"
+command="/usr/local/bin/dumbproxy"
+command_args="-config /etc/dumbproxy/dumbproxy.cfg"
+command_background="yes"
+pidfile="/run/dumbproxy.pid"
+EOF
+chmod +x /etc/init.d/dumbproxy
+rc-update add dumbproxy default 2>/dev/null
+rc-service dumbproxy start 2>/dev/null
+else
+green "9. Starting the systemd service..."
+systemctl daemon-reload
+systemctl enable dumbproxy
+systemctl start dumbproxy
+fi
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "Dumbproxy installation completed"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "Proxy URL: ${yellow}https://auto:${dp_passwd}@${ext_ip}:${dp_port}${plain}"
+echo
+blue "Configuration:"
+echo "  Protocol: HTTPS"
+echo "  Host: $ext_ip"
+echo "  Port: $dp_port"
+echo "  Username: auto"
+echo "  Password: $dp_passwd"
+echo
+yellow "Client setup:"
+echo "  HTTPS proxy: $ext_ip:$dp_port"
+echo "  Authentication: auto / $dp_passwd"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+uninstall_dumbproxy(){
+if [[ ! -f /etc/dumbproxy/dumbproxy.cfg ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+readp "Are you sure you want to uninstall Dumbproxy? [y/n]: " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+manage_dumbproxy
+return
+fi
+
+green "Uninstalling Dumbproxy..."
+
+if [[ x"${release}" == x"alpine" ]]; then
+rc-service dumbproxy stop 2>/dev/null
+rc-update del dumbproxy default 2>/dev/null
+rm -f /etc/init.d/dumbproxy
+else
+systemctl stop dumbproxy 2>/dev/null
+systemctl disable dumbproxy 2>/dev/null
+rm -f /etc/systemd/system/dumbproxy.service
+systemctl daemon-reload
+fi
+
+rm -rf /etc/dumbproxy
+rm -f /usr/local/bin/dumbproxy
+rm -f /usr/local/bin/myip
+
+green "Dumbproxy uninstalled successfully!"
+sleep 2
+manage_dumbproxy
+}
+
+show_dumbproxy_info(){
+if [[ ! -f /etc/dumbproxy/config.env ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+source /etc/dumbproxy/config.env
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "Dumbproxy configuration"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "Proxy URL: ${yellow}https://auto:${DP_PASS}@${DP_IP}:${DP_PORT}${plain}"
+echo
+blue "Settings:"
+echo "  Protocol: HTTPS"
+echo "  Host: $DP_IP"
+echo "  Port: $DP_PORT"
+echo "  Username: auto"
+echo "  Password: $DP_PASS"
+echo
+yellow "Browser/app setup:"
+echo "  HTTPS proxy: $DP_IP:$DP_PORT"
+echo "  Auth: auto / $DP_PASS"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+restart_dumbproxy(){
+if [[ ! -f /etc/dumbproxy/dumbproxy.cfg ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+green "Restarting Dumbproxy..."
+if [[ x"${release}" == x"alpine" ]]; then
+rc-service dumbproxy restart
+else
+systemctl restart dumbproxy
+fi
+green "Dumbproxy restarted successfully!"
+sleep 2
+manage_dumbproxy
+}
+
+list_dumbproxy_users(){
+if [[ ! -f /etc/dumbproxy/passwd ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+echo
+green "Dumbproxy user list:"
+echo
+
+source /etc/dumbproxy/config.env 2>/dev/null
+
+local user_count=0
+while IFS=: read -r username hash; do
+[[ -z "$username" ]] && continue
+((user_count++))
+echo -e "  ${yellow}$user_count.${plain} User: ${blue}$username${plain}"
+if [[ "$username" == "auto" && -n "$DP_PASS" ]]; then
+echo -e "     Password: $DP_PASS"
+else
+echo -e "     Password: ${red}(stored as hash, not available)${plain}"
+fi
+echo -e "     URL: https://${username}:PASSWORD@${DP_IP}:${DP_PORT}"
+echo
+done < /etc/dumbproxy/passwd
+
+if [[ "$user_count" -eq 0 ]]; then
+yellow "No users found"
+fi
+
+blue "Total users: $user_count"
+echo
+}
+
+add_dumbproxy_user(){
+if [[ ! -f /etc/dumbproxy/passwd ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+echo
+green "Add a new Dumbproxy user"
+echo
+
+readp "Enter username: " new_user
+if [[ -z "$new_user" ]]; then
+red "Username is required!" && sleep 2 && manage_dumbproxy_users
+return
+fi
+
+if grep -q "^${new_user}:" /etc/dumbproxy/passwd 2>/dev/null; then
+red "Username '$new_user' already exists!" && sleep 2 && manage_dumbproxy_users
+return
+fi
+
+readp "Enter password (press Enter to auto-generate): " new_pass
+if [[ -z "$new_pass" ]]; then
+new_pass=$(tr -cd '[:alnum:]' < /dev/urandom | dd bs=1 count=12 2>/dev/null || echo "dppass$(date +%s)" | head -c 12)
+fi
+
+green "Adding user '$new_user'..."
+
+if [[ -f /usr/local/bin/dumbproxy ]]; then
+/usr/local/bin/dumbproxy -passwd /etc/dumbproxy/passwd "$new_user" "$new_pass" 2>/dev/null || {
+echo "${new_user}:$(openssl passwd -apr1 "$new_pass")" >> /etc/dumbproxy/passwd
+}
+else
+echo "${new_user}:$(openssl passwd -apr1 "$new_pass")" >> /etc/dumbproxy/passwd
+fi
+
+source /etc/dumbproxy/config.env 2>/dev/null
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "User added successfully!"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "Username: ${blue}$new_user${plain}"
+echo -e "Password: ${blue}$new_pass${plain}"
+echo -e "Proxy URL: ${yellow}https://${new_user}:${new_pass}@${DP_IP}:${DP_PORT}${plain}"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+delete_dumbproxy_user(){
+if [[ ! -f /etc/dumbproxy/passwd ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+local user_count
+user_count=$(wc -l < /etc/dumbproxy/passwd | tr -d ' ')
+
+if [[ "$user_count" -le 1 ]]; then
+red "Cannot delete the last remaining user." && sleep 2 && manage_dumbproxy_users
+return
+fi
+
+list_dumbproxy_users
+
+readp "Enter username to delete: " del_user
+
+if [[ -z "$del_user" ]]; then
+red "Username not provided" && sleep 2 && manage_dumbproxy_users
+return
+fi
+
+if ! grep -q "^${del_user}:" /etc/dumbproxy/passwd 2>/dev/null; then
+red "Username '$del_user' not found!" && sleep 2 && manage_dumbproxy_users
+return
+fi
+
+readp "Confirm deletion of user '$del_user'? [y/n]: " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+manage_dumbproxy_users
+return
+fi
+
+green "Deleting user '$del_user'..."
+
+sed -i "/^${del_user}:/d" /etc/dumbproxy/passwd
+
+green "User '$del_user' deleted successfully!"
+sleep 2
+manage_dumbproxy_users
+}
+
+manage_dumbproxy_users(){
+if [[ ! -f /etc/dumbproxy/passwd ]]; then
+red "Dumbproxy is not installed!" && sleep 2 && manage_dumbproxy
+return
+fi
+
+echo
+green "Dumbproxy user management"
+echo
+local user_count
+user_count=$(wc -l < /etc/dumbproxy/passwd | tr -d ' ')
+blue "Current users: $user_count"
+echo
+yellow "1: Add a new user"
+yellow "2: Delete a user"
+yellow "3: List all users"
+yellow "0: Return to the previous menu"
+readp "Please select [0-3]: " menu
+
+case "$menu" in
+1) add_dumbproxy_user ;;
+2) delete_dumbproxy_user ;;
+3) list_dumbproxy_users ;;
+0) manage_dumbproxy ;;
+*) manage_dumbproxy_users ;;
+esac
+}
+
+manage_dumbproxy(){
+echo
+green "Dumbproxy HTTPS proxy management"
+echo
+if [[ -f /etc/dumbproxy/dumbproxy.cfg ]]; then
+blue "Status: Installed"
+local user_count
+user_count=$(wc -l < /etc/dumbproxy/passwd 2>/dev/null | tr -d ' ')
+echo "Users: $user_count"
+else
+blue "Status: Not installed"
+fi
+echo
+yellow "1: Install Dumbproxy (auto SSL certificate for IP)"
+yellow "2: Uninstall Dumbproxy"
+yellow "3: Show proxy credentials"
+yellow "4: Restart Dumbproxy service"
+yellow "5: Manage Dumbproxy users (add/delete/list)"
+yellow "0: Return to the main menu"
+readp "Please select [0-5]: " menu
+
+case "$menu" in
+1) install_dumbproxy ;;
+2) uninstall_dumbproxy ;;
+3) show_dumbproxy_info ;;
+4) restart_dumbproxy ;;
+5) manage_dumbproxy_users ;;
+0) sb ;;
+*) manage_dumbproxy ;;
+esac
+}
+
 changeip(){
 if [[ "$sbnh" == "1.10" ]]; then
 v4v6
@@ -4572,6 +5012,7 @@ green "15. Refresh local IP, adjust IPV4/IPV6 configuration output"
 white "----------------------------------------------------------------------------------"
 green "16. Sing-box-yg usage guide"
 green "17. User management (add/delete users)"
+green "18. Dumbproxy HTTPS proxy (simple proxy with auto SSL)"
 white "----------------------------------------------------------------------------------"
 green "0. Exit the script"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -4684,7 +5125,7 @@ showprotocol
 fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
-readp "Please enter the number [0-17]:" Input
+readp "Please enter the number [0-18]:" Input
 case "$Input" in  
  1 ) instsllsingbox;;
  2 ) unins;;
@@ -4703,5 +5144,6 @@ case "$Input" in
 15 ) wgcfgo && sbshare;;
 16 ) sbsm;;
 17 ) manageusers;;
+18 ) manage_dumbproxy;;
  * ) exit 
 esac
