@@ -3806,7 +3806,7 @@ if [[ -n "$local_test_ip" ]]; then
 green "Local SOCKS5 test passed: $local_test_ip"
 yellow "If Telegram still cannot connect from outside, the remaining cause is usually your VPS firewall or cloud security group blocking TCP $socks_port."
 else
-red "Local SOCKS5 test failed. Check option 10 (logs) before testing Telegram again."
+yellow "Local SOCKS5 auto-check did not confirm connectivity. This does not always mean the proxy is broken; test it manually if needed."
 fi
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -4158,6 +4158,310 @@ case "$menu" in
 5) change_socks5_creds ;;
 0) sb ;;
 *) manage_socks5 ;;
+esac
+}
+
+check_docker(){
+if command -v docker &> /dev/null; then
+return 0
+fi
+
+green "Docker not detected, installing..."
+
+if [[ x"${release}" == x"alpine" ]]; then
+apk update
+apk add docker docker-cli-compose
+rc-update add docker boot 2>/dev/null
+rc-service docker start 2>/dev/null
+else
+if [ -x "$(command -v apt-get)" ]; then
+apt-get update
+apt-get install -y docker.io docker-compose
+elif [ -x "$(command -v yum)" ]; then
+yum install -y docker docker-compose
+elif [ -x "$(command -v dnf)" ]; then
+dnf install -y docker docker-compose
+fi
+
+systemctl enable docker
+systemctl start docker
+fi
+
+if command -v docker &> /dev/null; then
+green "Docker installed successfully!"
+return 0
+else
+red "Failed to install Docker!"
+return 1
+fi
+}
+
+install_mtproto(){
+if [[ -f /etc/mtproto/config.env ]]; then
+red "MTProto proxy is already installed!" && sleep 2 && manage_mtproto
+return
+fi
+
+green "Installing MTProto proxy for Telegram..."
+
+if ! check_docker; then
+red "Docker installation failed. Cannot continue." && sleep 2 && sb
+return
+fi
+
+green "1. Configuring the port..."
+local mtp_port=443
+
+get_used_ports(){
+ss -tunlp 2>/dev/null | awk '{print $5}' | sed 's/.*://' | grep -E '^[0-9]+$' | sort -u
+}
+
+local used_ports
+used_ports=$(get_used_ports)
+
+check_port_used(){
+local port=$1
+echo "$used_ports" | grep -q "^${port}$"
+}
+
+if check_port_used "$mtp_port"; then
+yellow "Port $mtp_port is already in use."
+readp "Enter a custom port for the MTProto proxy (default 8443): " mtp_port
+if [[ -z "$mtp_port" ]]; then
+mtp_port=8443
+fi
+while check_port_used "$mtp_port"; do
+yellow "Port $mtp_port is also in use."
+readp "Enter another port: " mtp_port
+if [[ -z "$mtp_port" ]]; then
+mtp_port=$((RANDOM % 55535 + 10000))
+yellow "Using a random port: $mtp_port"
+fi
+done
+fi
+
+green "Port selected: $mtp_port"
+
+green "2. Selecting the Fake TLS domain..."
+echo
+yellow "Popular domains for Fake TLS:"
+echo "  1) google.com"
+echo "  2) cloudflare.com"
+echo "  3) microsoft.com"
+echo "  4) apple.com"
+echo "  5) amazon.com"
+echo "  6) github.com"
+echo "  7) Enter a custom domain"
+echo
+readp "Select a domain [1-7, default=1]: " domain_choice
+
+case "$domain_choice" in
+2) mtp_domain="cloudflare.com" ;;
+3) mtp_domain="microsoft.com" ;;
+4) mtp_domain="apple.com" ;;
+5) mtp_domain="amazon.com" ;;
+6) mtp_domain="github.com" ;;
+7)
+readp "Enter a custom Fake TLS domain: " mtp_domain
+if [[ -z "$mtp_domain" ]]; then
+mtp_domain="google.com"
+fi
+;;
+*) mtp_domain="google.com" ;;
+esac
+
+green "Domain selected: $mtp_domain"
+
+green "3. Generating the secret..."
+local mtp_secret
+mtp_secret=$(head -c 16 /dev/urandom | xxd -ps)
+
+green "4. Detecting the external IP..."
+local mtp_ip
+mtp_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s4m5 icanhazip.com 2>/dev/null)
+if [[ -z "$mtp_ip" ]]; then
+mtp_ip=$(curl -s6m5 ip.sb 2>/dev/null || curl -s6m5 icanhazip.com 2>/dev/null)
+fi
+
+if [[ -z "$mtp_ip" ]]; then
+red "Failed to detect the external IP address" && sleep 2 && sb
+return
+fi
+
+green "External IP: $mtp_ip"
+
+green "5. Pulling the MTProto proxy image and starting the container..."
+docker pull telegrammessenger/proxy:latest 2>/dev/null
+
+docker run -d \
+--name mtproto-proxy \
+--restart always \
+-p ${mtp_port}:443 \
+-e SECRET=${mtp_secret} \
+-e TAG=${mtp_domain} \
+telegrammessenger/proxy:latest
+
+if [[ $? -ne 0 ]]; then
+red "Failed to start the MTProto proxy container!" && sleep 2 && sb
+return
+fi
+
+green "6. Saving the configuration..."
+mkdir -p /etc/mtproto
+cat > /etc/mtproto/config.env <<EOF
+MTP_PORT=${mtp_port}
+MTP_SECRET=${mtp_secret}
+MTP_DOMAIN=${mtp_domain}
+MTP_IP=${mtp_ip}
+EOF
+
+sleep 2
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "MTProto proxy installation completed!"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "MTProto Link (tg://): ${yellow}tg://proxy?server=${mtp_ip}&port=${mtp_port}&secret=${mtp_secret}${plain}"
+echo
+echo -e "MTProto Link (https://): ${yellow}https://t.me/proxy?server=${mtp_ip}&port=${mtp_port}&secret=${mtp_secret}${plain}"
+echo
+blue "Manual configuration:"
+echo "  Server: $mtp_ip"
+echo "  Port: $mtp_port"
+echo "  Secret: $mtp_secret"
+echo "  Fake TLS domain: $mtp_domain"
+echo
+yellow "Usage in Telegram:"
+echo "  1. Click either MTProto link above to auto-configure"
+echo "  2. Or add it manually in Telegram settings"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+uninstall_mtproto(){
+if [[ ! -f /etc/mtproto/config.env ]]; then
+red "MTProto proxy is not installed!" && sleep 2 && manage_mtproto
+return
+fi
+
+readp "Are you sure you want to uninstall the MTProto proxy? [y/n]: " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+manage_mtproto
+return
+fi
+
+green "Uninstalling the MTProto proxy..."
+
+docker stop mtproto-proxy 2>/dev/null
+docker rm mtproto-proxy 2>/dev/null
+
+rm -rf /etc/mtproto
+
+green "MTProto proxy uninstalled successfully!"
+sleep 2
+manage_mtproto
+}
+
+show_mtproto_info(){
+if [[ ! -f /etc/mtproto/config.env ]]; then
+red "MTProto proxy is not installed!" && sleep 2 && manage_mtproto
+return
+fi
+
+source /etc/mtproto/config.env
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "MTProto proxy configuration"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "MTProto Link (tg://): ${yellow}tg://proxy?server=${MTP_IP}&port=${MTP_PORT}&secret=${MTP_SECRET}${plain}"
+echo
+echo -e "MTProto Link (https://): ${yellow}https://t.me/proxy?server=${MTP_IP}&port=${MTP_PORT}&secret=${MTP_SECRET}${plain}"
+echo
+blue "Connection details:"
+echo "  Server: $MTP_IP"
+echo "  Port: $MTP_PORT"
+echo "  Secret: $MTP_SECRET"
+echo "  Fake TLS domain: $MTP_DOMAIN"
+echo
+yellow "Usage in Telegram:"
+echo "  1. Click either MTProto link above to auto-configure"
+echo "  2. Or go to Settings > Data and Storage > Proxy > Add Proxy"
+echo "  3. Select MTProto and enter the details above"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+restart_mtproto(){
+if [[ ! -f /etc/mtproto/config.env ]]; then
+red "MTProto proxy is not installed!" && sleep 2 && manage_mtproto
+return
+fi
+
+green "Restarting the MTProto proxy..."
+docker restart mtproto-proxy 2>/dev/null
+
+if [[ $? -eq 0 ]]; then
+green "MTProto proxy restarted successfully!"
+else
+red "Failed to restart the MTProto proxy!"
+fi
+sleep 2
+manage_mtproto
+}
+
+view_mtproto_logs(){
+if [[ ! -f /etc/mtproto/config.env ]]; then
+red "MTProto proxy is not installed!" && sleep 2 && manage_mtproto
+return
+fi
+
+echo
+green "MTProto proxy logs (last 50 lines):"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+docker logs --tail 50 mtproto-proxy 2>&1
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+readp "Press Enter to return to the menu..."
+manage_mtproto
+}
+
+manage_mtproto(){
+echo
+green "MTProto proxy management (for Telegram)"
+echo
+if [[ -f /etc/mtproto/config.env ]]; then
+blue "Status: Installed"
+source /etc/mtproto/config.env 2>/dev/null
+echo "Port: $MTP_PORT"
+echo "Domain: $MTP_DOMAIN"
+if docker ps | grep -q mtproto-proxy; then
+echo "Container: Running"
+else
+echo "Container: Stopped"
+fi
+else
+blue "Status: Not installed"
+fi
+echo
+yellow "1: Install the MTProto proxy (requires Docker)"
+yellow "2: Uninstall the MTProto proxy"
+yellow "3: Show proxy credentials and link"
+yellow "4: Restart the MTProto proxy"
+yellow "5: View logs"
+yellow "0: Return to the main menu"
+readp "Please select [0-5]: " menu
+
+case "$menu" in
+1) install_mtproto ;;
+2) uninstall_mtproto ;;
+3) show_mtproto_info ;;
+4) restart_mtproto ;;
+5) view_mtproto_logs ;;
+0) sb ;;
+*) manage_mtproto ;;
 esac
 }
 
@@ -5577,6 +5881,7 @@ green "16. Sing-box-yg usage guide"
 green "17. User management (add/delete users)"
 green "18. Dumbproxy HTTPS proxy (simple proxy with auto SSL)"
 green "19. SOCKS5 proxy for Telegram (via Sing-box)"
+green "20. MTProto proxy for Telegram (via Docker)"
 white "----------------------------------------------------------------------------------"
 green "0. Exit the script"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -5689,7 +5994,7 @@ showprotocol
 fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
-readp "Please enter the number [0-19]:" Input
+readp "Please enter the number [0-20]:" Input
 case "$Input" in  
  1 ) instsllsingbox;;
  2 ) unins;;
@@ -5710,5 +6015,6 @@ case "$Input" in
 17 ) manageusers;;
 18 ) manage_dumbproxy;;
 19 ) manage_socks5;;
+20 ) manage_mtproto;;
  * ) exit 
 esac
