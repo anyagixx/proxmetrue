@@ -3685,6 +3685,436 @@ case "$menu" in
 esac
 }
 
+get_socks5_index(){
+jq -r '.inbounds | to_entries[] | select(.value.tag == "socks5-in" or .value.type == "socks") | .key' /etc/s-box/sb.json 2>/dev/null | head -n 1
+}
+
+check_socks5_exists(){
+local socks_index
+socks_index=$(get_socks5_index)
+[[ -n "$socks_index" ]]
+}
+
+install_socks5(){
+sbactive
+
+if check_socks5_exists; then
+red "SOCKS5 proxy is already enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+green "Enabling the SOCKS5 proxy in Sing-box..."
+
+local socks_port=1080
+if ss -tlnp 2>/dev/null | grep -q ":${socks_port} "; then
+readp "Port $socks_port is already in use. Enter a custom port: " socks_port
+if [[ -z "$socks_port" ]]; then
+socks_port=10800
+fi
+fi
+
+local socks_user="socks5"
+local socks_pass
+socks_pass=$(tr -cd '[:alnum:]' < /dev/urandom | dd bs=1 count=12 2>/dev/null || echo "socks5pass$(date +%s)" | head -c 12)
+
+green "Adding the SOCKS5 inbound to the configuration..."
+
+local tmp_file num
+tmp_file=$(mktemp)
+jq --arg port "$socks_port" --arg user "$socks_user" --arg pass "$socks_pass" '
+.inbounds += [{
+  "type": "socks",
+  "tag": "socks5-in",
+  "listen": "::",
+  "listen_port": ($port | tonumber),
+  "users": [{
+    "username": $user,
+    "password": $pass
+  }]
+}]
+' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+echo "SOCKS5_PORT=$socks_port" > /etc/s-box/socks5.env
+echo "SOCKS5_USER=$socks_user" >> /etc/s-box/socks5.env
+echo "SOCKS5_PASS=$socks_pass" >> /etc/s-box/socks5.env
+
+restartsb
+
+local server_ip
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+[[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "SOCKS5 proxy enabled successfully!"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "SOCKS5 URL: ${yellow}socks5://${socks_user}:${socks_pass}@${server_ip}:${socks_port}${plain}"
+echo
+blue "Configuration:"
+echo "  Host: $server_ip"
+echo "  Port: $socks_port"
+echo "  Username: $socks_user"
+echo "  Password: $socks_pass"
+echo
+yellow "Telegram setup:"
+echo "  Settings -> Data and Storage -> Proxy -> SOCKS5"
+echo "  Server: $server_ip:$socks_port"
+echo "  User: $socks_user"
+echo "  Password: $socks_pass"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+uninstall_socks5(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+green "Disabling the SOCKS5 proxy..."
+
+local socks_index tmp_file num
+socks_index=$(get_socks5_index)
+tmp_file=$(mktemp)
+jq --argjson idx "$socks_index" 'del(.inbounds[$idx])' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+rm -f /etc/s-box/socks5.env
+
+restartsb
+
+green "SOCKS5 proxy disabled successfully!"
+sleep 2
+manage_socks5
+}
+
+show_socks5_info(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+local socks_index
+socks_index=$(get_socks5_index)
+local socks_port socks_user socks_pass
+if [[ -f /etc/s-box/socks5.env ]]; then
+source /etc/s-box/socks5.env
+fi
+[[ -z "$SOCKS5_PORT" ]] && SOCKS5_PORT=$(jq -r ".inbounds[$socks_index].listen_port" /etc/s-box/sb.json)
+[[ -z "$SOCKS5_USER" ]] && SOCKS5_USER=$(jq -r ".inbounds[$socks_index].users[0].username" /etc/s-box/sb.json)
+[[ -z "$SOCKS5_PASS" ]] && SOCKS5_PASS=$(jq -r ".inbounds[$socks_index].users[0].password" /etc/s-box/sb.json)
+socks_port=$SOCKS5_PORT
+socks_user=$SOCKS5_USER
+socks_pass=$SOCKS5_PASS
+
+local server_ip
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+[[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "SOCKS5 proxy configuration"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "SOCKS5 URL: ${yellow}socks5://${socks_user}:${socks_pass}@${server_ip}:${socks_port}${plain}"
+echo
+blue "Settings:"
+echo "  Host: $server_ip"
+echo "  Port: $socks_port"
+echo "  Username: $socks_user"
+echo "  Password: $socks_pass"
+echo
+yellow "Telegram setup:"
+echo "  Settings -> Data and Storage -> Proxy"
+echo "  Add Proxy -> SOCKS5"
+echo "  Server: $server_ip:$socks_port"
+echo "  User: $socks_user"
+echo "  Password: $socks_pass"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+change_socks5_creds(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+local socks_index
+socks_index=$(get_socks5_index)
+
+readp "Enter the new username (press Enter to keep the current one): " new_user
+readp "Enter the new password (press Enter to auto-generate): " new_pass
+
+if [[ -z "$new_user" ]]; then
+new_user=$(jq -r ".inbounds[$socks_index].users[0].username" /etc/s-box/sb.json)
+fi
+
+if [[ -z "$new_pass" ]]; then
+new_pass=$(tr -cd '[:alnum:]' < /dev/urandom | dd bs=1 count=12 2>/dev/null || echo "socks5pass$(date +%s)" | head -c 12)
+fi
+
+green "Updating the SOCKS5 credentials..."
+
+local tmp_file num socks_port
+tmp_file=$(mktemp)
+jq --argjson idx "$socks_index" --arg user "$new_user" --arg pass "$new_pass" '
+.inbounds[$idx].users[0].username = $user |
+.inbounds[$idx].users[0].password = $pass
+' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+socks_port=$(jq -r ".inbounds[$socks_index].listen_port" /etc/s-box/sb.json)
+echo "SOCKS5_USER=$new_user" > /etc/s-box/socks5.env
+echo "SOCKS5_PASS=$new_pass" >> /etc/s-box/socks5.env
+echo "SOCKS5_PORT=$socks_port" >> /etc/s-box/socks5.env
+
+restartsb
+
+green "SOCKS5 credentials updated!"
+show_socks5_info
+}
+
+list_socks5_users(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+local socks_index
+socks_index=$(get_socks5_index)
+
+echo
+green "SOCKS5 user list:"
+echo
+
+local user_count server_ip socks_port
+user_count=$(jq ".inbounds[$socks_index].users | length" /etc/s-box/sb.json 2>/dev/null)
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+[[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+socks_port=$(jq -r ".inbounds[$socks_index].listen_port" /etc/s-box/sb.json)
+
+if [[ "$user_count" -eq 0 ]]; then
+yellow "No users found!"
+return
+fi
+
+for ((i=0; i<user_count; i++)); do
+local username password
+username=$(jq -r ".inbounds[$socks_index].users[$i].username" /etc/s-box/sb.json)
+password=$(jq -r ".inbounds[$socks_index].users[$i].password" /etc/s-box/sb.json)
+echo -e "  ${yellow}$((i+1)).${plain} User: ${blue}$username${plain}"
+echo -e "     Password: $password"
+echo -e "     URL: socks5://${username}:${password}@${server_ip}:${socks_port}"
+echo
+done
+
+blue "Total users: $user_count"
+echo
+}
+
+add_socks5_user(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+local socks_index
+socks_index=$(get_socks5_index)
+
+echo
+green "Add a new SOCKS5 user"
+echo
+
+readp "Enter username (press Enter to auto-generate): " new_user
+if [[ -z "$new_user" ]]; then
+local user_count
+user_count=$(jq ".inbounds[$socks_index].users | length" /etc/s-box/sb.json 2>/dev/null)
+new_user="socks5_$((user_count + 1))"
+fi
+
+local existing
+existing=$(jq -r --argjson idx "$socks_index" --arg user "$new_user" '.inbounds[$idx].users[] | select(.username == $user) | .username' /etc/s-box/sb.json 2>/dev/null)
+if [[ -n "$existing" ]]; then
+red "Username '$new_user' already exists!" && sleep 2 && manage_socks5_users
+return
+fi
+
+readp "Enter password (press Enter to auto-generate): " new_pass
+if [[ -z "$new_pass" ]]; then
+new_pass=$(tr -cd '[:alnum:]' < /dev/urandom | dd bs=1 count=12 2>/dev/null || echo "socks5pass$(date +%s)" | head -c 12)
+fi
+
+green "Adding user '$new_user'..."
+
+local tmp_file num
+tmp_file=$(mktemp)
+jq --argjson idx "$socks_index" --arg user "$new_user" --arg pass "$new_pass" '
+.inbounds[$idx].users += [{"username": $user, "password": $pass}]
+' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+restartsb
+
+local server_ip socks_port
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+[[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+socks_port=$(jq -r ".inbounds[$socks_index].listen_port" /etc/s-box/sb.json)
+
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+green "User added successfully!"
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+echo
+echo -e "Username: ${blue}$new_user${plain}"
+echo -e "Password: ${blue}$new_pass${plain}"
+echo -e "SOCKS5 URL: ${yellow}socks5://${new_user}:${new_pass}@${server_ip}:${socks_port}${plain}"
+echo
+white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
+
+delete_socks5_user(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+local socks_index user_count
+socks_index=$(get_socks5_index)
+user_count=$(jq ".inbounds[$socks_index].users | length" /etc/s-box/sb.json 2>/dev/null)
+
+if [[ "$user_count" -le 1 ]]; then
+red "Cannot delete! At least one user must remain." && sleep 2 && manage_socks5_users
+return
+fi
+
+list_socks5_users
+
+readp "Enter username to delete: " del_user
+
+if [[ -z "$del_user" ]]; then
+red "Username not provided" && sleep 2 && manage_socks5_users
+return
+fi
+
+local existing
+existing=$(jq -r --argjson idx "$socks_index" --arg user "$del_user" '.inbounds[$idx].users[] | select(.username == $user) | .username' /etc/s-box/sb.json 2>/dev/null)
+if [[ -z "$existing" ]]; then
+red "Username '$del_user' not found!" && sleep 2 && manage_socks5_users
+return
+fi
+
+readp "Confirm deletion of user '$del_user'? [y/n]: " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+manage_socks5_users
+return
+fi
+
+green "Deleting user '$del_user'..."
+
+local tmp_file num
+tmp_file=$(mktemp)
+jq --argjson idx "$socks_index" --arg user "$del_user" 'del(.inbounds[$idx].users[] | select(.username == $user))' /etc/s-box/sb.json > "$tmp_file" && mv "$tmp_file" /etc/s-box/sb.json
+
+[[ "$sbnh" == "1.10" ]] && num=10 || num=11
+cp /etc/s-box/sb.json /etc/s-box/sb${num}.json
+
+restartsb
+
+green "User '$del_user' deleted successfully!"
+sleep 2
+manage_socks5_users
+}
+
+manage_socks5_users(){
+sbactive
+
+if ! check_socks5_exists; then
+red "SOCKS5 proxy is not enabled!" && sleep 2 && manage_socks5
+return
+fi
+
+echo
+green "SOCKS5 user management"
+echo
+local socks_index user_count
+socks_index=$(get_socks5_index)
+user_count=$(jq ".inbounds[$socks_index].users | length" /etc/s-box/sb.json 2>/dev/null)
+blue "Current users: $user_count"
+echo
+yellow "1: Add new user"
+yellow "2: Delete user"
+yellow "3: List all users"
+yellow "0: Return to previous menu"
+readp "Please select [0-3]: " menu
+
+case "$menu" in
+1) add_socks5_user ;;
+2) delete_socks5_user ;;
+3) list_socks5_users ;;
+0) manage_socks5 ;;
+*) manage_socks5_users ;;
+esac
+}
+
+manage_socks5(){
+sbactive
+echo
+green "SOCKS5 proxy management (via Sing-box)"
+echo
+if check_socks5_exists; then
+local socks_index socks_port user_count
+blue "Status: Enabled"
+socks_index=$(get_socks5_index)
+socks_port=$(jq -r ".inbounds[$socks_index].listen_port" /etc/s-box/sb.json 2>/dev/null)
+user_count=$(jq ".inbounds[$socks_index].users | length" /etc/s-box/sb.json 2>/dev/null)
+echo "Port: $socks_port"
+echo "Users: $user_count"
+else
+blue "Status: Disabled"
+fi
+echo
+yellow "1: Enable SOCKS5 proxy"
+yellow "2: Disable SOCKS5 proxy"
+yellow "3: Show SOCKS5 credentials"
+yellow "4: Manage SOCKS5 users (add/delete/list)"
+yellow "5: Change primary SOCKS5 credentials"
+yellow "0: Return to the main menu"
+readp "Please select [0-5]: " menu
+
+case "$menu" in
+1) install_socks5 ;;
+2) uninstall_socks5 ;;
+3) show_socks5_info ;;
+4) manage_socks5_users ;;
+5) change_socks5_creds ;;
+0) sb ;;
+*) manage_socks5 ;;
+esac
+}
+
 changeip(){
 if [[ "$sbnh" == "1.10" ]]; then
 v4v6
@@ -5100,6 +5530,7 @@ white "-------------------------------------------------------------------------
 green "16. Sing-box-yg usage guide"
 green "17. User management (add/delete users)"
 green "18. Dumbproxy HTTPS proxy (simple proxy with auto SSL)"
+green "19. SOCKS5 proxy for Telegram (via Sing-box)"
 white "----------------------------------------------------------------------------------"
 green "0. Exit the script"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -5212,7 +5643,7 @@ showprotocol
 fi
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo
-readp "Please enter the number [0-18]:" Input
+readp "Please enter the number [0-19]:" Input
 case "$Input" in  
  1 ) instsllsingbox;;
  2 ) unins;;
@@ -5232,5 +5663,6 @@ case "$Input" in
 16 ) sbsm;;
 17 ) manageusers;;
 18 ) manage_dumbproxy;;
+19 ) manage_socks5;;
  * ) exit 
 esac
