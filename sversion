@@ -1,0 +1,6 @@
+v25.4.1 update content:
+1. The multi-functional web page adds the function of viewing the process /jc
+2. Aggregation of common node sharing updates, supports up to 22 nodes: three protocols each have three IPs, argo fully covers 13 port nodes, and the immortal preferred IP
+has been added. 3. Fixed related bugs and text corrections
+This update method: Reinstallation and update (Online update: SSH select 5 to update. Reinstallation and update: Must uninstall and reinstall)
+For details, see: https://ygkkk.blogspot.com/2025/01/serv00.html

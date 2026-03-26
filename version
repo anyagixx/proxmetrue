@@ -1,0 +1,11 @@
+v26.3.15 update content:
+
+Note: If you are currently in v26.3.2 version, you can update directly. If it is a previous version, you must uninstall and reinstall
+
+update content:
+1. Support the latest 1.30 series kernel, adapt to mihomo and singbox subscription client configuration
+2. Support Anytls protocol, self-signed certificates or domain name certificates can be applied to Anytls
+3. The 1.10 series kernel continues to retain all the original features, the 1.30 series kernel continues to be updated, and the two kernel modes can be seamlessly switched
+4. Support local IP subscription link, menu options 3-8 can be set.
+
+. For details, see: https://ygkkk.blogspot.com/2023/10/sing-box-yg.html

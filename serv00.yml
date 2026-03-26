@@ -1,0 +1,107 @@
+name: Keep Servers Alive
+# If you have installed the Serv00 local SSH script, do not run this github deployment again. This will cause the process to be full. You must choose one of the two!
+on:
+  #If you use keep-alive web pages, please disable cron and keep the # symbol at the beginning of the following two lines to prevent cron and web keep-alive from running repeatedly and causing the process to be full.
+  #schedule:
+  # - cron: '0 */4 * * *' # Executed every 4 hours (private library runs for 500 minutes per month, 16 minutes per day)
+  workflow_dispatch: 
+
+jobs:
+  keep_servers_alive:
+    runs-on: ubuntu-latest
+    env:
+    # serv00 variable addition rule:
+    # RES (required): n means not to reset the deployment every time, y means to reset the deployment every time. REP (required): n means not to reset the random port (leave three ports blank), y means reset the port (leave three ports blank). SSH_USER (required) indicates the serv00 account name. SSH_PASS (required) indicates the serv00 password. REALITY means reality domain name (leaving blank means serv00 official domain name: your serv00 account name.serv00.net). SUUID represents uuid (leave blank to represent random uuid). TCP1_PORT represents the tcp port of vless (leaving blank represents a random tcp port). TCP2_PORT indicates the tcp port of vmess (leaving blank indicates a random tcp port). UDP_PORT represents the udp port of hy2 (leave blank to represent a random udp port). HOST (required) means logging in to the serv00 server domain name. ARGO_DOMAIN represents the argo fixed domain name (leaving blank represents a temporary domain name). ARGO_AUTH represents the argo fixed domain name token (leaving blank represents a temporary domain name).
+    # Required variables: RES, REP, SSH_USER, SSH_PASS, HOST
+    # Note []"",: Do not delete these symbols randomly, align them according to rules
+    # One {serv00 server} per line, one service can also be used, use, at the end, interval, there is no need to use, interval at the end of the last server
+      ACCOUNTS: >
+        [
+        {"RES":"n", "REP":"n", "SSH_USER":"Your serv00 account name", "SSH_PASS":"Your serv00 account password", "REALITY":"Your serv00 account name.serv00.net", "SUUID":"Self-set UUID", "TCP1_PORT":"vless tcp port", "TCP2_PORT":"vmess tcp port", "UDP_PORT":"hy2 udp port", "HOST":"s1.serv00.com", "ARGO_DOMAIN":"", "ARGO_AUTH":""},
+        {"RES":"y", "REP":"y", "SSH_USER":"123456", "SSH_PASS":"7890000", "REALITY":"time.is", "SUUID":"73203ee6-b3fa-4a3d-b5df-6bb2f55073ad", "TCP1_PORT":"", "TCP2_PORT":"", "UDP_PORT":"", "HOST":"s16.serv00.com", "ARGO_DOMAIN":"Your argo fixed domain name", "ARGO_AUTH":"eyJhIjoiOTM3YzFjYWI88552NTFiYTM4ZTY0ZDQzRmlNelF0TkRBd1pUQTRNVEJqTUdVeCJ9"} 
+        ]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Install required packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass curl jq
+
+      - name: Process each account
+        run: |
+          run_remote_command() {
+          local RES=$1
+          local REP=$2
+          local SSH_USER=$3
+          local SSH_PASS=$4
+          local REALITY=${5}
+          local SUUID=$6
+          local TCP1_PORT=$7
+          local TCP2_PORT=$8
+          local UDP_PORT=$9
+          local HOST=${10}
+          local ARGO_DOMAIN=${11}
+          local ARGO_AUTH=${12}
+          if [ -z "${ARGO_DOMAIN}" ]; then
+          echo "No Argo domain was provided. Requesting a temporary Argo domain."
+          else
+          echo "Argo has set a fixed domain name: ${ARGO_DOMAIN}"
+          fi
+          remote_command="export reym=$REALITY UUID=$SUUID vless_port=$TCP1_PORT vmess_port=$TCP2_PORT hy2_port=$UDP_PORT reset=$RES resport=$REP ARGO_DOMAIN=${ARGO_DOMAIN} ARGO_AUTH=${ARGO_AUTH} && bash <(curl -Ls https://raw.githubusercontent.com/anyagixx/proxmetrue/main/serv00keep.sh)"
+          echo "Executing remote command on $HOST as $SSH_USER with command: $remote_command"
+          sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$remote_command"
+           }
+                 echo "*****************************************************"
+                 echo "*****************************************************"
+                 echo "Yongge Github Project: github.com/yonggekkk"
+                 echo "Yongge Blogger Blog: ygkkk.blogspot.com"
+                 echo "Yongge YouTube Channel: www.youtube.com/@ygkkk"
+                 echo "Automatic remote deployment and keepalive script for the Serv00 three-protocol setup [GitHub]"
+                 echo "Version: V25.3.26"
+                 echo "*****************************************************"
+                 echo "*****************************************************"
+              count=0  
+           for account in $(echo "${ACCOUNTS}" | jq -c '.[]'); do
+              count=$((count+1))
+              RES=$(echo $account | jq -r '.RES')
+              REP=$(echo $account | jq -r '.REP')
+              SSH_USER=$(echo $account | jq -r '.SSH_USER')
+              SSH_PASS=$(echo $account | jq -r '.SSH_PASS')
+              REALITY=$(echo $account | jq -r '.REALITY')
+              SUUID=$(echo $account | jq -r '.SUUID')
+              TCP1_PORT=$(echo $account | jq -r '.TCP1_PORT')
+              TCP2_PORT=$(echo $account | jq -r '.TCP2_PORT')
+              UDP_PORT=$(echo $account | jq -r '.UDP_PORT')
+              HOST=$(echo $account | jq -r '.HOST')
+              ARGO_DOMAIN=$(echo $account | jq -r '.ARGO_DOMAIN')
+              ARGO_AUTH=$(echo $account | jq -r '.ARGO_AUTH') 
+          if sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" -q exit; then
+            echo "🎉Server [$count] connected successfully. Server: $HOST, account: $SSH_USER" 
+          if [ -z "${ARGO_DOMAIN}" ]; then
+           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep [l]ocalhost:$TCP2_PORT > /dev/null"
+            else
+           check_process="ps aux | grep '[c]onfig' > /dev/null && ps aux | grep '[t]oken $ARGO_AUTH' > /dev/null"
+           fi
+          if ! sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "$check_process" || [[ "$RES" =~ ^[Yy]$ ]]; then
+            echo "⚠️Detected that the main process or argo process has not started, or performed a reset"
+             echo "⚠️Start repairing or resetting the deployment now...please wait"
+             output=$(run_remote_command "$RES" "$REP" "$SSH_USER" "$SSH_PASS" "${REALITY}" "$SUUID" "$TCP1_PORT" "$TCP2_PORT" "$UDP_PORT" "$HOST" "${ARGO_DOMAIN}" "${ARGO_AUTH}")
+            echo "Remote command execution result: $output"
+          else
+            echo "🎉All required processes are running normally."
+            SSH_USER_LOWER=$(echo "$SSH_USER" | tr '[:upper:]' '[:lower:]')
+            sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+echo \"The configuration is displayed as follows:\"
+            cat domains/${SSH_USER_LOWER}.serv00.net/logs/list.txt
+             echo \"====================================================\"
+             "
+            fi
+           else
+            echo "===================================================="
+            echo "❌ Connection to server [$count] failed. Server: $HOST, account: $SSH_USER"
+            echo "⚠️Maybe the account name, password, and server name are entered incorrectly, or the current server is under maintenance"  
+            echo "===================================================="
+           fi
+            done

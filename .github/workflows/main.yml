@@ -1,0 +1,40 @@
+name: Parallel URL Fetch
+
+on:
+ # schedule:
+#  - cron: '* /10 * * * *' # Every 10 minutes (open library runs for 2000 minutes per month, 64 minutes per day)
+  workflow_dispatch: 
+
+jobs:
+  fetch-urls:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Fetch URLs in parallel
+      # secrets setting, variable name: http
+      # Variable value requirements: space between each keepalive /up webpage or each restarted /re webpage OR, alternatively, spaced with http: // in front of the webpage
+# Variable value example: http://keepalive-or-restart-page-1 http://keepalive-or-restart-page-2 http://keepalive-or-restart-page-3 ...
+      run: |
+        IFS=$',， ' read -r -a http <<< "${{ secrets.http }}"
+         echo "*****************************************************"
+         echo "Yongge GitHub project: github.com/yonggekkk"
+         echo "Yongge blog: ygkkk.blogspot.com"
+         echo "Yongge YouTube channel: www.youtube.com/@ygkkk"
+         echo "🎉GitHub scheduled keepalive for Serv00 web endpoints🎉"
+         echo "Make sure you have already installed the Serv00 SSH script or the GitHub/VPS/router deployment script."
+         echo "Script address: https://github.com/yonggekkk/sing-box-yg"
+         echo "*****************************************************"
+        for url in "${http[@]}"; do
+          response=$(curl -sk "$url" || true)
+          if [[ "$response" == *"Web Keepalive Launch"* ]]; then
+          echo "🎉$url is running normally; keepalive completed successfully."
+          elif [[ "$response" == *"Main program restarted successfully"* ]]; then
+          echo "🎉$url is running normally; the main process was restarted successfully."
+          else
+         echo "❌$url failed. Check whether the URL variables are correct, or whether the Serv00 instance is unavailable."
+         fi
+        done
+        wait

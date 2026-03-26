@@ -1,0 +1,171 @@
+sing-box official SFA/SFI/SFW client configuration brief description
+Novice Key Points Operation Guide V23.11.15 (updated from time to time)
+
+Note: most beginners only need to modify the node section and the routing-group section in their own sing-box configuration file
+------------------------------------------------------------------------------------
+node area
+------------------------------------------------------------------------------------
+1. vless-reality-vision node
+------------------------------------------------------------------------------------
+    {
+      "type": "vless",
+"tag": "vless-sb", custom node name
+"server": "1.2.3.4", server local ip
+"server_port": 12345, custom port
+"uuid": "658ff7f4-0448-4368-a104-c3108517f56a", custom uuid
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+"server_name": "www.yahoo.com", Custom third-party stolen domain name
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+      "reality": {
+          "enabled": true,
+"public_key": "oBwBeiq8MjOqHS0fTXm39gRM_fdXgbAvtEWfAaW", customized public-key
+"short_id": "91b4db47" customized short-id
+        }
+      }
+    },
+
+
+------------------------------------------------------------------------------------
+2. vmess-ws(tls)+argo node
+------------------------------------------------------------------------------------
+     {
+"server": "1.2.3.4", server local ip, resolved domain name, preferred IP, preferred domain name
+"server_port": 12345, customized port, vps-cdn and argo-cdn, note 13 port changes
+"tag": "vmess-sb", custom node name
+            "tls": {
+"enabled": true, tls on: true tls off: false
+"server_name": "yg.ygkkk.eu.org", tls enabled: resolved domain name or argo domain name
+                "insecure": false,
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                }
+            },
+            "transport": {
+                "headers": {
+                    "Host": [
+"yg.ygkkk.eu.org" resolved domain name or argo domain name
+                    ]
+                },
+"path": "658ff7f4-0448-4368-a104-c3108517f56a-vm", customized uuid value-vm
+                "type": "ws"
+            },
+            "type": "vmess",
+            "security": "auto",
+"uuid": "658ff7f4-0448-4368-a104-c3108517f56a" custom uuid
+        },
+
+------------------------------------------------------------------------------------        
+3. hysteria2 node
+------------------------------------------------------------------------------------
+    {
+        "type": "hysteria2",
+"tag": "hy2-sb", custom node name
+"server": "1.2.3.4", self-signed certificate: server local ip Domain name certificate: Resolved domain name
+"server_port": 12345, custom port
+"password": "658ff7f4-0448-4368-a104-c3108517f56a", custom uuid
+        "tls": {
+            "enabled": true,
+"server_name": "www.bing.com", Self-signed certificate: www.bing.com Domain name certificate: Resolved domain name
+"insecure": true, self-signed certificate: true domain name certificate: false
+            "alpn": [
+                "h3"
+            ]
+        }
+    },
+
+
+------------------------------------------------------------------------------------
+4. tuic5 node
+------------------------------------------------------------------------------------
+        {
+            "type":"tuic",
+"tag": "tuic5-sb", custom node name
+"server": "1.2.3.4", self-signed certificate: server local ip Domain name certificate: resolved domain name
+"server_port": 12345, customized port
+"uuid": "658ff7f4-0448-4368-a104-c3108517f56a", custom uuid
+"password": "658ff7f4-0448-4368-a104-c3108517f56a", customized uuid
+            "congestion_control": "bbr",
+            "udp_relay_mode": "native",
+            "udp_over_stream": false,
+            "zero_rtt_handshake": false,
+            "heartbeat": "10s",
+            "tls":{
+                "enabled": true,
+"server_name": "www.bing.com", Self-signed certificate: www.bing.com Domain name certificate: resolved domain name
+"insecure": true, self-signed certificate: true Domain name certificate: false
+                "alpn": [
+                    "h3"
+                ]
+            }
+        },
+
+------------------------------------------------------------------------------------
+5. cf-vless(tls) node
+------------------------------------------------------------------------------------
+     {
+"server": "1.2.3.4", preferred IP, preferred domain name
+"server_port": 12345, customized port, note 13 port changes
+"tag": "cf-vless-sb", custom node name
+            "tls": {
+"enabled": true, tls on: true tls off: false
+"server_name": "yg.ygkkk.eu.org", tls enabled: pages domain name or custom domain name
+                "insecure": false,
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                }
+            },
+            "transport": {
+                "headers": {
+                    "Host": [
+"yg.ygkkk.eu.org" workers, pages domain name or custom domain name
+                    ]
+                },
+"path": "/?ed=2048", path path:/?ed=2048
+                "type": "ws"
+            },
+            "type": "vless",
+"uuid": "658ff7f4-0448-4368-a104-c3108517f56a" custom uuid
+        },
+
+
+
+------------------------------------------------------------------------------------
+Distribution group: There are two groups in total, divided into manual selection select and automatic selection auto. The nodes in each group can be increased or decreased according to the needs, ensuring that the custom node names that appear can be found in the node area
+------------------------------------------------------------------------------------
+Manual selection select
+{
+      "tag": "select",
+      "type": "selector",
+      "default": "auto",
+      "outbounds": [
+        "auto",                
+"vless-sb", custom node name
+"vmess-sb", custom node name
+"hy2-sb", custom node name
+"tuic5-sb", custom node name
+"cf-vless-sb" customized node name
+          …………                 ………… 
+      ]
+    },
+------------------------------------------------------------------------------------
+Automatically select auto
+{
+      "tag": "auto",
+      "type": "urltest",
+      "outbounds": [
+"vless-sb", custom node name
+"vmess-sb", custom node name
+"hy2-sb", custom node name
+"tuic5-sb", custom node name
+"cf-vless-sb" customized node name
+          ………………               ………… 
+      ]
+    },
+------------------------------------------------------------------------------------
