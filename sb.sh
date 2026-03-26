@@ -2923,17 +2923,22 @@ red "UUID not found"
 return 1
 fi
 
-local server_ip
-server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
-local hostname
-hostname=$(hostname)
+local hostname server_ip server_ipcl ym argo argogd
 local vl_port vm_port hy2_port tu5_port an_port
-local vl_name vm_name hy2_name tu5_name an_name
-local public_key short_id ws_path tls
-local hy2_key_path tu5_key_path an_key_path
-local ins_hy2=1 ins_tu5=1 ins_an=1
+local vl_name vm_name public_key short_id ws_path tls
+local hy2_name tu5_name an_name hy2_key_path tu5_key_path an_key_path
+local vmadd_local vmadd_are_local vmadd_argo
+local hy2_ports hy2ports hyps
 local sb_hy2_ip sb_tu5_ip sb_an_ip
-local v6test vm_link vl_link hy2_link tu5_link an_link aggr_links aggr_base64
+local ins_hy2 ins_tu5 ins_an
+local vl_link vm_link vm_argo_tmp_link vm_argo_fixed_link hy2_link tu5_link an_link
+local subscription_text
+
+hostname=$(hostname)
+server_ip=$(cat /etc/s-box/server_ip.log 2>/dev/null)
+server_ipcl=$(cat /etc/s-box/server_ipcl.log 2>/dev/null)
+[[ -z "$server_ip" ]] && server_ip=$(curl -s4m5 ip.sb 2>/dev/null || curl -s6m5 ip.sb 2>/dev/null)
+[[ -z "$server_ipcl" ]] && server_ipcl="$server_ip"
 
 vl_port=$(jq -r '.inbounds[0].listen_port' /etc/s-box/sb.json)
 vm_port=$(jq -r '.inbounds[1].listen_port' /etc/s-box/sb.json)
@@ -2941,31 +2946,77 @@ hy2_port=$(jq -r '.inbounds[2].listen_port' /etc/s-box/sb.json)
 tu5_port=$(jq -r '.inbounds[3].listen_port' /etc/s-box/sb.json)
 an_port=$(jq -r '.inbounds[4].listen_port // empty' /etc/s-box/sb.json)
 vl_name=$(jq -r '.inbounds[0].tls.server_name' /etc/s-box/sb.json)
-vm_name=$(jq -r '.inbounds[1].tls.server_name' /etc/s-box/sb.json)
-hy2_name=$(jq -r '.inbounds[2].tls.server_name' /etc/s-box/sb.json)
-tu5_name=$(jq -r '.inbounds[3].tls.server_name' /etc/s-box/sb.json)
-an_name=$(jq -r '.inbounds[4].tls.server_name // empty' /etc/s-box/sb.json)
 public_key=$(cat /etc/s-box/public.key 2>/dev/null)
 short_id=$(jq -r '.inbounds[0].tls.reality.short_id[0]' /etc/s-box/sb.json)
+argo=$(grep -a trycloudflare.com /etc/s-box/argo.log 2>/dev/null | awk 'NR==2{print}' | awk -F// '{print $2}' | awk '{print $1}')
 ws_path=$(jq -r '.inbounds[1].transport.path' /etc/s-box/sb.json)
 tls=$(jq -r '.inbounds[1].tls.enabled' /etc/s-box/sb.json)
-hy2_key_path=$(jq -r '.inbounds[2].tls.key_path' /etc/s-box/sb.json)
-tu5_key_path=$(jq -r '.inbounds[3].tls.key_path' /etc/s-box/sb.json)
-an_key_path=$(jq -r '.inbounds[4].tls.key_path // empty' /etc/s-box/sb.json)
+vm_name=$(jq -r '.inbounds[1].tls.server_name' /etc/s-box/sb.json)
 
-[[ "$hy2_key_path" = '/etc/s-box/private.key' ]] && ins_hy2=0
-[[ "$tu5_key_path" = '/etc/s-box/private.key' ]] && ins_tu5=0
-[[ "$an_key_path" = '/etc/s-box/private.key' ]] && ins_an=0
-
-v6test=$(curl -s6m5 ip.sb 2>/dev/null)
-if [[ -n "$v6test" ]]; then
-sb_hy2_ip="[$server_ip]"
-sb_tu5_ip="[$server_ip]"
-sb_an_ip="[$server_ip]"
+if [[ "$tls" = "false" ]]; then
+if [[ -f /etc/s-box/cfymjx.txt ]]; then
+vm_name=$(cat /etc/s-box/cfymjx.txt 2>/dev/null)
+fi
+vmadd_local=$server_ipcl
+vmadd_are_local=$server_ip
 else
-sb_hy2_ip="$server_ip"
-sb_tu5_ip="$server_ip"
-sb_an_ip="$server_ip"
+vmadd_local=$vm_name
+vmadd_are_local=$vm_name
+fi
+
+if [[ -f /etc/s-box/cfvmadd_local.txt ]]; then
+vmadd_local=$(cat /etc/s-box/cfvmadd_local.txt 2>/dev/null)
+vmadd_are_local=$(cat /etc/s-box/cfvmadd_local.txt 2>/dev/null)
+fi
+
+if [[ -f /etc/s-box/cfvmadd_argo.txt ]]; then
+vmadd_argo=$(cat /etc/s-box/cfvmadd_argo.txt 2>/dev/null)
+else
+vmadd_argo=www.visa.com.sg
+fi
+
+hy2_ports=$(iptables -t nat -nL --line 2>/dev/null | grep -w "$hy2_port" | awk '{print $8}' | sed 's/dpts://; s/dpt://' | tr '\n' ',' | sed 's/,$//')
+if [[ -n "$hy2_ports" ]]; then
+hy2ports=$(echo "$hy2_ports" | sed 's/:/-/g')
+hyps="$hy2_port,$hy2ports"
+fi
+
+ym=$(cat /root/ygkkkca/ca.log 2>/dev/null)
+if [[ -z "$ym" && -x ~/.acme.sh/acme.sh ]]; then
+ym=$(bash ~/.acme.sh/acme.sh --list 2>/dev/null | tail -1 | awk '{print $1}')
+fi
+
+hy2_key_path=$(jq -r '.inbounds[2].tls.key_path' /etc/s-box/sb.json)
+if [[ "$hy2_key_path" = '/etc/s-box/private.key' ]]; then
+hy2_name=www.bing.com
+sb_hy2_ip=$server_ip
+ins_hy2=1
+else
+hy2_name=${ym:-$server_ip}
+sb_hy2_ip=$hy2_name
+ins_hy2=0
+fi
+
+tu5_key_path=$(jq -r '.inbounds[3].tls.key_path' /etc/s-box/sb.json)
+if [[ "$tu5_key_path" = '/etc/s-box/private.key' ]]; then
+tu5_name=www.bing.com
+sb_tu5_ip=$server_ip
+ins_tu5=1
+else
+tu5_name=${ym:-$server_ip}
+sb_tu5_ip=$tu5_name
+ins_tu5=0
+fi
+
+an_key_path=$(jq -r '.inbounds[4].tls.key_path // empty' /etc/s-box/sb.json)
+if [[ "$an_key_path" = '/etc/s-box/private.key' ]]; then
+an_name=www.bing.com
+sb_an_ip=$server_ip
+ins_an=1
+else
+an_name=${ym:-$server_ip}
+sb_an_ip=$an_name
+ins_an=0
 fi
 
 echo
@@ -2979,17 +3030,35 @@ vl_link="vless://$user_uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-v
 echo -e "${yellow}$vl_link${plain}"
 echo
 
-red "🚀[ Vmess-ws ]"
 if [[ "$tls" = "true" ]]; then
+red "🚀[ Vmess-ws-tls ]"
 vm_link="vmess://$(echo '{"add":"'$server_ip'","aid":"0","host":"'$vm_name'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-tls-$hostname'","tls":"tls","sni":"'$vm_name'","type":"none","v":"2"}' | base64 -w 0)"
 else
+if ps -ef 2>/dev/null | grep "localhost:${vm_port}" >/dev/null 2>&1 && [[ -n "$argo" ]]; then
+red "🚀[ Vmess-ws(tls)+Argo temporary ]"
+vm_argo_tmp_link="vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argo'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argo'","fp":"chrome","type":"none","v":"2"}' | base64 -w 0)"
+echo -e "${yellow}$vm_argo_tmp_link${plain}"
+echo
+fi
+if ps -ef 2>/dev/null | grep -q '[c]loudflared.*run' && [[ -s /etc/s-box/sbargoym.log ]]; then
+argogd=$(cat /etc/s-box/sbargoym.log 2>/dev/null)
+red "🚀[ Vmess-ws(tls)+Argo fixed ]"
+vm_argo_fixed_link="vmess://$(echo '{"add":"'$vmadd_argo'","aid":"0","host":"'$argogd'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"8443","ps":"'vm-argo-$hostname'","tls":"tls","sni":"'$argogd'","fp":"chrome","type":"none","v":"2"}' | base64 -w 0)"
+echo -e "${yellow}$vm_argo_fixed_link${plain}"
+echo
+fi
+red "🚀[ Vmess-ws ]"
 vm_link="vmess://$(echo '{"add":"'$server_ip'","aid":"0","host":"'$vm_name'","id":"'$user_uuid'","net":"ws","path":"'$ws_path'","port":"'$vm_port'","ps":"'vm-ws-$hostname'","tls":"","type":"none","v":"2"}' | base64 -w 0)"
 fi
 echo -e "${yellow}$vm_link${plain}"
 echo
 
 red "🚀[ Hysteria-2 ]"
+if [[ -n "$hyps" ]]; then
+hy2_link="hysteria2://$user_uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&mport=$hyps&sni=$hy2_name#hy2-$hostname"
+else
 hy2_link="hysteria2://$user_uuid@$sb_hy2_ip:$hy2_port?security=tls&alpn=h3&insecure=$ins_hy2&sni=$hy2_name#hy2-$hostname"
+fi
 echo -e "${yellow}$hy2_link${plain}"
 echo
 
@@ -2998,7 +3067,12 @@ tu5_link="tuic://$user_uuid:$user_uuid@$sb_tu5_ip:$tu5_port?congestion_control=b
 echo -e "${yellow}$tu5_link${plain}"
 echo
 
-aggr_links="$vl_link
+subscription_text="$vl_link"
+[[ -n "$vm_argo_tmp_link" ]] && subscription_text="$subscription_text
+$vm_argo_tmp_link"
+[[ -n "$vm_argo_fixed_link" ]] && subscription_text="$subscription_text
+$vm_argo_fixed_link"
+subscription_text="$subscription_text
 $vm_link
 $hy2_link
 $tu5_link"
@@ -3008,7 +3082,7 @@ red "🚀[ AnyTLS ]"
 an_link="anytls://$user_uuid@$sb_an_ip:$an_port?&sni=$an_name&allowInsecure=$ins_an#anytls-$hostname"
 echo -e "${yellow}$an_link${plain}"
 echo
-aggr_links="$aggr_links
+subscription_text="$subscription_text
 $an_link"
 fi
 
@@ -3018,8 +3092,22 @@ green "QR codes:"
 echo
 green "Vless-reality QR code:"
 qrencode -o - -t ANSIUTF8 "$vl_link"
+if [[ -n "$vm_argo_tmp_link" ]]; then
 echo
+green "Vmess-ws(tls)+Argo temporary QR code:"
+qrencode -o - -t ANSIUTF8 "$vm_argo_tmp_link"
+fi
+if [[ -n "$vm_argo_fixed_link" ]]; then
+echo
+green "Vmess-ws(tls)+Argo fixed QR code:"
+qrencode -o - -t ANSIUTF8 "$vm_argo_fixed_link"
+fi
+echo
+if [[ "$tls" = "true" ]]; then
+green "Vmess-ws-tls QR code:"
+else
 green "Vmess-ws QR code:"
+fi
 qrencode -o - -t ANSIUTF8 "$vm_link"
 echo
 green "Hysteria2 QR code:"
@@ -3038,12 +3126,11 @@ echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 red "🚀[ Aggregated subscription ] for user: $user_uuid"
 echo
-aggr_base64=$(echo -e "$aggr_links" | base64 -w 0)
-echo "Aggregated share link (base64):"
-echo -e "${yellow}$aggr_base64${plain}"
+echo "Subscription text:"
+echo -e "${yellow}$subscription_text${plain}"
 echo
 green "Aggregated subscription QR code:"
-qrencode -o - -t ANSIUTF8 "$aggr_base64"
+qrencode -o - -t ANSIUTF8 "$subscription_text"
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 }
 
